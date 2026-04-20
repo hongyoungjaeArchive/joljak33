@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as d3 from "d3";
 import type { 공격로그입력 } from "@/types/input";
+import AttackMap, { type 공격항목 } from "@/components/AttackMap";
 
 // ── 시나리오 데이터 ──────────────────────────────────────────────────────────
 
@@ -472,6 +473,16 @@ export default function DashboardPage() {
   const 활성색 = 건강점수 !== null ? (건강점수 < 34 ? "#ef4444" : 건강점수 < 67 ? "#f59e0b" : "#22c55e") : "#22c55e";
   const 건강라벨 = 건강점수 !== null ? (건강점수 < 34 ? "위험" : 건강점수 < 67 ? "주의" : "양호") : "";
 
+  // 어택맵용 데이터 — 선택된 시나리오만
+  const 어택맵데이터: 공격항목 | null = 선택시나리오
+    ? {
+        국가: 선택시나리오.데이터.공격자국가 ?? "미국",
+        ip: 선택시나리오.데이터.공격자IP,
+        공격유형: 선택시나리오.데이터.공격유형,
+        위험등급: 선택시나리오.데이터.위험등급,
+      }
+    : null;
+
   return (
     <>
       <style>{`
@@ -641,6 +652,20 @@ export default function DashboardPage() {
 
         {/* ── 오른쪽 패널 ── */}
         <div className="오른쪽패널">
+          {/* ── 어택맵 ── */}
+          <div className="카드" style={{ padding: "16px 20px 14px" }}>
+            <div className="그래프카드헤더">
+              <span className="제목">🌍 실시간 공격 발원지 지도</span>
+              <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
+                {선택시나리오 ? `${선택시나리오.데이터.공격자국가} 강조 표시` : "시나리오를 선택하면 강조됩니다"}
+              </span>
+            </div>
+            <AttackMap
+              공격={어택맵데이터}
+              허니팟ID={선택시나리오?.데이터.허니팟ID}
+            />
+          </div>
+
           {showGraph && (
             <div className="카드" style={{ padding: "16px 20px 14px" }}>
               <div className="그래프카드헤더">

@@ -21,7 +21,8 @@ export async function POST(
   }
 
   try {
-    const 로그 = (await req.json()) as 공격로그입력;
+    const body = await req.json() as { 로그?: 공격로그입력 } | 공격로그입력;
+    const 로그 = ("로그" in body && body.로그 ? body.로그 : body) as 공격로그입력;
     const 결과 = await 분석서비스._재시도호출(프롬프트맵[분석유형]?.(로그) ?? "");
     return NextResponse.json(결과);
   } catch (e) {
