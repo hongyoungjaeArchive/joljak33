@@ -1,10 +1,10 @@
 /**
- * Ollama LLM 서비스
+ * Claude API LLM 서비스
  * - 일반 분석 (단건 응답)
  * - 스트리밍 분석 (토큰 단위 실시간 전송)
- * (services/llm_service.py → TypeScript)
  */
 
+import Anthropic from "@anthropic-ai/sdk";
 import type { 공격로그입력 } from "@/types/input";
 import {
   프롬프트맵,
@@ -12,10 +12,12 @@ import {
   전체리포트_프롬프트,
 } from "@/lib/prompts";
 
-const OLLAMA_주소 = process.env.OLLAMA_HOST ?? "http://localhost:11434";
-const 기본모델 = "llama3.1:8b";
-const 요청타임아웃 = 180_000; // ms
-const 최대재시도 = 2;
+const 기본모델 = "claude-opus-4-7";
+const 최대토큰 = 1024;
+
+// 모든 분석에 공통으로 캐시되는 시스템 프롬프트
+const SYSTEM_PROMPT = `당신은 사이버 보안 전문가입니다. 사용자가 제공하는 공격 로그를 분석하고 요청된 형식의 JSON만 출력하세요.
+마크다운 코드블록, 설명 텍스트 없이 순수 JSON만 반환하세요. 출력은 반드시 { 로 시작하고 } 로 끝나야 합니다.`;
 
 function JSON추출(텍스트: string): Record<string, unknown> {
   let s = 텍스트.replace(/```(?:json)?\s*/g, "").replace(/```\s*$/g, "").trim();
@@ -26,88 +28,66 @@ function JSON추출(텍스트: string): Record<string, unknown> {
 
 export class LLM분석서비스 {
   readonly 모델: string;
-  readonly 주소: string;
+  private client: Anthropic;
 
-  constructor(모델 = 기본모델, 주소 = OLLAMA_주소) {
+  constructor(모델 = 기본모델) {
     this.모델 = 모델;
-    this.주소 = 주소;
+    this.client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
   }
 
-  // ─── 내부: Ollama 단건 호출 ──────────────────────────────────────────────
+  // ─── 내부: Claude 단건 호출 ──────────────────────────────────────────────
 
-  async _ollama호출(프롬프트: string): Promise<string> {
-    const res = await fetch(`${this.주소}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.모델,
-        prompt: 프롬프트,
-        stream: false,
-        format: "json",
-        options: { temperature: 0.1, top_p: 0.9, num_predict: 1024 },
-      }),
-      signal: AbortSignal.timeout(요청타임아웃),
+  async _claude호출(프롬프트: string): Promise<string> {
+    const response = await this.client.messages.create({
+      model: this.모델,
+      max_tokens: 최대토큰,
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: 프롬프트 }],
     });
-    if (!res.ok) throw new Error(`Ollama 응답 오류: ${res.status}`);
-    const data = (await res.json()) as { response?: string };
-    return data.response ?? "";
+    const block = response.content[0];
+    return block.type === "text" ? block.text : "";
   }
 
-  // ─── 내부: Ollama 스트리밍 호출 ─────────────────────────────────────────
+  // ─── 내부: Claude 스트리밍 호출 ─────────────────────────────────────────
 
-  async *_ollama스트리밍(프롬프트: string): AsyncGenerator<[string, boolean]> {
-    const res = await fetch(`${this.주소}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.모델,
-        prompt: 프롬프트,
-        stream: true,
-        format: "json",
-        options: { temperature: 0.1, top_p: 0.9, num_predict: 1024 },
-      }),
-      signal: AbortSignal.timeout(요청타임아웃),
+  async *_claude스트리밍(프롬프트: string): AsyncGenerator<[string, boolean]> {
+    const stream = this.client.messages.stream({
+      model: this.모델,
+      max_tokens: 최대토큰,
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: 프롬프트 }],
     });
-    if (!res.ok || !res.body) throw new Error(`Ollama 스트리밍 오류: ${res.status}`);
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const data = JSON.parse(line) as { response?: string; done?: boolean };
-          const token = data.response ?? "";
-          const isDone = data.done ?? false;
-          yield [token, isDone];
-          if (isDone) return;
-        } catch {
-          // JSON 파싱 실패 시 skip
-        }
+    for await (const event of stream) {
+      if (
+        event.type === "content_block_delta" &&
+        event.delta.type === "text_delta"
+      ) {
+        yield [event.delta.text, false];
       }
     }
+    yield ["", true];
   }
 
   // ─── 내부: 재시도 호출 ───────────────────────────────────────────────────
 
   async _재시도호출(프롬프트: string): Promise<Record<string, unknown>> {
-    let lastError: unknown;
-    for (let i = 0; i <= 최대재시도; i++) {
-      try {
-        const 원문 = await this._ollama호출(프롬프트);
-        return JSON추출(원문);
-      } catch (e) {
-        lastError = e;
-      }
-    }
-    throw new Error(`JSON 파싱 실패: ${String(lastError)}`);
+    const 원문 = await this._claude호출(프롬프트);
+    return JSON추출(원문);
   }
 
   // ─── 스트리밍: 단일 분석 ─────────────────────────────────────────────────
@@ -124,7 +104,7 @@ export class LLM분석서비스 {
     const 프롬프트 = 프롬프트fn(로그);
     let 전체텍스트 = "";
 
-    for await (const [token, done] of this._ollama스트리밍(프롬프트)) {
+    for await (const [token, done] of this._claude스트리밍(프롬프트)) {
       if (token) {
         전체텍스트 += token;
         yield { 유형: "토큰", 텍스트: token };
@@ -153,10 +133,10 @@ export class LLM분석서비스 {
       const 유형 = 단계목록[i];
       yield { 유형: "단계시작", 단계: i + 1, 총단계, 이름: 분석단계이름[유형] };
 
-      const 프롬프트 = 프롬프트맵[유형](로그);
+      const 프롬프트 = 프롬프트맵[유형]!(로그);
       let 전체텍스트 = "";
 
-      for await (const [token, done] of this._ollama스트리밍(프롬프트)) {
+      for await (const [token, done] of this._claude스트리밍(프롬프트)) {
         if (token) {
           전체텍스트 += token;
           yield { 유형: "토큰", 텍스트: token };
@@ -186,7 +166,7 @@ export class LLM분석서비스 {
     );
     let 서술텍스트 = "";
 
-    for await (const [token, done] of this._ollama스트리밍(서술프롬프트)) {
+    for await (const [token, done] of this._claude스트리밍(서술프롬프트)) {
       if (token) {
         서술텍스트 += token;
         yield { 유형: "토큰", 텍스트: token };
@@ -240,14 +220,7 @@ export class LLM분석서비스 {
   // ─── 서버 상태 확인 ──────────────────────────────────────────────────────
 
   async 서버상태확인(): Promise<boolean> {
-    try {
-      const res = await fetch(`${this.주소}/api/tags`, {
-        signal: AbortSignal.timeout(5_000),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
+    return !!process.env.ANTHROPIC_API_KEY;
   }
 }
 

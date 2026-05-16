@@ -169,12 +169,12 @@ export default function LandingPage() {
       <section className="features" id="features">
         <div className="section-label">핵심 기능</div>
         <h2 className="section-title">강력한 AI 보안 분석</h2>
-        <p className="section-sub">Llama 3.1 기반 LLM이 허니팟 공격 로그를 다각도로 분석합니다</p>
+        <p className="section-sub">Claude AI가 허니팟 공격 로그를 다각도로 실시간 분석합니다</p>
         <div className="feature-grid">
           <div className="feature-card">
             <div className="feature-icon i">🧠</div>
             <div className="feature-title">LLM 실시간 스트리밍</div>
-            <div className="feature-desc">Ollama + Llama 3.1이 토큰 단위로 분석 결과를 스트리밍하여 실시간 추론 과정을 확인할 수 있습니다.</div>
+            <div className="feature-desc">Claude API가 토큰 단위로 분석 결과를 스트리밍하여 실시간 추론 과정을 확인할 수 있습니다.</div>
           </div>
           <div className="feature-card">
             <div className="feature-icon y">📊</div>
@@ -217,7 +217,7 @@ export default function LandingPage() {
       {/* FOOTER */}
       <footer>
         <span>🍯 정사평 — 허니팟 기반 사이버 공격 분석 시스템</span>
-        <span>Powered by Llama 3.1 · Built with Next.js</span>
+        <span>Powered by Claude API · Built with Next.js</span>
       </footer>
     </>
   );
